@@ -26,6 +26,9 @@ struct ProblemStatus {
     int frozen_wrong = 0; // Wrong submissions during freeze
     int frozen_submissions = 0; // Total submissions during freeze
     bool is_frozen = false;
+    bool has_pending_ac = false; // AC during freeze
+    int pending_ac_time = 0; // Time of AC during freeze
+    int pending_ac_wrong_before = 0; // Wrong before freeze for pending AC
 
     // For queries
     int last_submission_time = 0;
@@ -41,6 +44,19 @@ struct Team {
     vector<int> solve_times; // Times when problems were solved (for tie-breaking)
     ProblemStatus problems[MAX_PROBLEMS];
 
+    // Keep solve_times sorted in descending order for efficient comparison
+    void add_solve_time(int time) {
+        solve_times.push_back(time);
+        // Keep sorted in descending order
+        for (int i = (int)solve_times.size() - 1; i > 0; i--) {
+            if (solve_times[i] > solve_times[i-1]) {
+                swap(solve_times[i], solve_times[i-1]);
+            } else {
+                break;
+            }
+        }
+    }
+
     // For ranking comparison
     bool operator<(const Team& other) const {
         // More solved problems is better
@@ -52,21 +68,16 @@ struct Team {
             return penalty_time < other.penalty_time;
         }
         // Compare solve times (largest first, then second largest, etc.)
-        vector<int> my_times = solve_times;
-        vector<int> other_times = other.solve_times;
-        sort(my_times.rbegin(), my_times.rend());
-        sort(other_times.rbegin(), other_times.rend());
-
-        size_t min_size = min(my_times.size(), other_times.size());
+        // solve_times are already sorted in descending order
+        size_t min_size = min(solve_times.size(), other.solve_times.size());
         for (size_t i = 0; i < min_size; i++) {
-            if (my_times[i] != other_times[i]) {
-                return my_times[i] < other_times[i];
+            if (solve_times[i] != other.solve_times[i]) {
+                return solve_times[i] < other.solve_times[i];
             }
         }
         // If all solve times are equal up to min_size, team with more solved problems wins
-        // (but they have same solved_count, so check size)
-        if (my_times.size() != other_times.size()) {
-            return my_times.size() > other_times.size();
+        if (solve_times.size() != other.solve_times.size()) {
+            return solve_times.size() > other.solve_times.size();
         }
         // Finally, lexicographic order of team name
         return name < other.name;
@@ -88,16 +99,7 @@ private:
     vector<int> ranking; // indices of teams in ranked order
 
     // For freeze/unfreeze
-    struct FrozenProblem {
-        int team_idx;
-        int problem_idx;
-        int wrong_before_freeze;
-        int frozen_submissions;
-        bool would_solve; // Would this submission solve the problem?
-        int solve_time; // If would_solve, what time
-        int frozen_ac_count; // How many AC in frozen submissions
-    };
-    vector<FrozenProblem> frozen_problems;
+    // No longer using FrozenProblem struct, tracking pending AC in ProblemStatus
 
     // For queries
     struct SubmissionRecord {
@@ -180,19 +182,12 @@ public:
                 prob.frozen_wrong++;
             } else {
                 // This would solve the problem if unfrozen
-                // Store for later unfreezing
-                FrozenProblem fp;
-                fp.team_idx = team_idx;
-                fp.problem_idx = problem_idx;
-                fp.wrong_before_freeze = prob.total_wrong; // Wrong before freeze
-                fp.frozen_submissions = prob.frozen_submissions;
-                fp.would_solve = true;
-                fp.solve_time = time;
-                fp.frozen_ac_count = 1; // This AC
-                frozen_problems.push_back(fp);
-
-                prob.is_frozen = true;
+                // Mark that there's a pending AC
+                prob.has_pending_ac = true;
+                prob.pending_ac_time = time;
+                prob.pending_ac_wrong_before = prob.total_wrong;
             }
+            prob.is_frozen = true;
         } else {
             // Not frozen or problem already solved
             if (!prob.solved) {
@@ -206,7 +201,7 @@ public:
                     team.solved_count++;
                     int problem_penalty = prob.first_ac_time + 20 * prob.wrong_before_ac;
                     team.penalty_time += problem_penalty;
-                    team.solve_times.push_back(prob.first_ac_time);
+                    team.add_solve_time(prob.first_ac_time);
                 } else {
                     prob.total_wrong++;
                 }
@@ -229,7 +224,6 @@ public:
         }
 
         is_frozen = true;
-        frozen_problems.clear();
 
         // Mark all unsolved problems as potentially frozen
         for (size_t i = 0; i < teams.size(); i++) {
@@ -300,11 +294,29 @@ public:
 
             // Apply frozen submissions
             if (prob.frozen_submissions > 0) {
-                // Check if there was an AC in frozen submissions
-                // For now, assume no AC (simplified)
-                prob.total_wrong += prob.frozen_wrong;
+                if (prob.has_pending_ac) {
+                    // There was an AC during freeze
+                    prob.solved = true;
+                    prob.first_ac_time = prob.pending_ac_time;
+                    prob.wrong_before_ac = prob.pending_ac_wrong_before;
+
+                    // Update team stats
+                    Team& team = teams[team_idx];
+                    team.solved_count++;
+                    int problem_penalty = prob.first_ac_time + 20 * prob.wrong_before_ac;
+                    team.penalty_time += problem_penalty;
+                    team.add_solve_time(prob.first_ac_time);
+
+                    // Total wrong includes wrong before freeze + wrong during freeze before AC
+                    prob.total_wrong = prob.pending_ac_wrong_before + prob.frozen_wrong;
+                } else {
+                    // No AC, just add wrong submissions
+                    prob.total_wrong += prob.frozen_wrong;
+                }
+
                 prob.frozen_wrong = 0;
                 prob.frozen_submissions = 0;
+                prob.has_pending_ac = false;
             }
 
             // Update rankings
@@ -315,7 +327,6 @@ public:
         }
 
         is_frozen = false;
-        frozen_problems.clear();
 
         // Output final scoreboard
         printScoreboard();
