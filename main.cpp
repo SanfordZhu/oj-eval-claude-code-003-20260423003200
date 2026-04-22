@@ -282,15 +282,19 @@ public:
             return a.second < b.second; // Smaller problem index first
         });
 
+        // First, mark all problems as not frozen
+        for (size_t i = 0; i < teams.size(); i++) {
+            for (int p = 0; p < problem_count; p++) {
+                teams[i].problems[p].is_frozen = false;
+            }
+        }
+
         // Process each frozen problem
         for (auto& fp : frozen_list) {
             int team_idx = fp.first;
             int problem_idx = fp.second;
             Team& team = teams[team_idx];
             ProblemStatus& prob = team.problems[problem_idx];
-
-            // Unfreeze this problem
-            prob.is_frozen = false;
 
             // Apply frozen submissions
             if (prob.frozen_submissions > 0) {
@@ -317,14 +321,18 @@ public:
                 prob.frozen_wrong = 0;
                 prob.frozen_submissions = 0;
                 prob.has_pending_ac = false;
+                prob.pending_ac_time = 0;
+                prob.pending_ac_wrong_before = 0;
+            } else {
+                // No frozen submissions, just clear flags
+                prob.has_pending_ac = false;
+                prob.pending_ac_time = 0;
+                prob.pending_ac_wrong_before = 0;
             }
-
-            // Update rankings
-            updateRankings();
-
-            // Check if ranking changed for this team
-            // For now, skip outputting ranking changes
         }
+
+        // Update rankings after all unfreezing
+        updateRankings();
 
         is_frozen = false;
 
